@@ -3,7 +3,6 @@ import { getTopWindowLocation } from 'src/utils'
 
 const BIDDER_CODE = 'justpremium'
 const ENDPOINT_URL = getTopWindowLocation().protocol + '//pre.ads.justpremium.com/v/2.0/t/xhr'
-const JP_ADAPTER_VERSION = '0.1'
 const pixels = []
 
 export const spec = {
@@ -40,11 +39,6 @@ export const spec = {
       sizes[zone] = sizes[zone] || []
       sizes[zone].push.apply(sizes[zone], b.sizes)
     })
-
-    payload.version = {
-      prebid: '$prebid.version$',
-      jp_adapter: JP_ADAPTER_VERSION
-    }
 
     const payloadString = JSON.stringify(payload)
 

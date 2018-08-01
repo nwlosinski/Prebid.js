@@ -41,7 +41,7 @@ gulp.task('default', ['webpack']);
 
 gulp.task('serve', ['lint', 'build-bundle-dev', 'watch', 'test']);
 
-gulp.task('serve-nw', ['build-bundle-dev']);
+gulp.task('serve-nw', ['lint', 'watch', 'e2etest']);
 
 gulp.task('run-tests', ['lint', 'test-coverage']);
 

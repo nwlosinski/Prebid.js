@@ -2,12 +2,13 @@ import { registerBidder } from 'src/adapters/bidderFactory'
 import { getTopWindowLocation } from 'src/utils'
 
 const BIDDER_CODE = 'justpremium'
-const ENDPOINT_URL = '//pre.ads.justpremium.com/v/2.0/t/xhr'
-const JP_ADAPTER_VERSION = '1.3'
+const ENDPOINT_URL = '//pre.ads.justpremium.com/v/2.1/t/xhr'
+const JP_ADAPTER_VERSION = '1.4'
 const pixels = []
 const TRACK_START_TIME = Date.now()
 let LAST_PAYLOAD = {}
 let AD_UNIT_IDS = []
+let LAST_REQUEST_TIME = {}
 
 export const spec = {
   code: BIDDER_CODE,
@@ -18,27 +19,41 @@ export const spec = {
   },
 
   buildRequests: (validBidRequests, bidderRequest) => {
-    const c = preparePubCond(validBidRequests)
-    const dim = getWebsiteDim()
-    AD_UNIT_IDS = validBidRequests.map(b => {
-      return b.adUnitCode
-    }).filter((value, index, self) => {
-      return self.indexOf(value) === index
+    let dim = getWebsiteDim()
+    let displaying = getCurrentlyDisplayedAd().map(displayed => {
+      displayed.timeInSec = (+new Date() - displayed.time) / 1000
+      return displayed
     })
-    const payload = {
-      zone: validBidRequests.map(b => {
-        return parseInt(b.params.zone)
-      }).filter((value, index, self) => {
-        return self.indexOf(value) === index
-      }),
+
+    let slots = validBidRequests.map(bid => {
+      const {bidId, adUnitCode, bidderRequestId, bidRequestsCount, mediaTypes, params} = bid
+      let lastReq = LAST_REQUEST_TIME[adUnitCode] ? (+new Date() - LAST_REQUEST_TIME[adUnitCode]) : 0
+      LAST_REQUEST_TIME[adUnitCode] = +new Date()
+      if (AD_UNIT_IDS.indexOf(adUnitCode) === -1) {
+        AD_UNIT_IDS.push(adUnitCode)
+      }
+      return {
+        id: bidId,
+        code: adUnitCode,
+        reqId: bidderRequestId,
+        count: bidRequestsCount,
+        type: 'banner',
+        sizes: mediaTypes.banner && mediaTypes.banner.sizes,
+        cond: preparePubCond(params),
+        zoneId: params.zone,
+        lastReq: lastReq,
+        displaying: displaying
+      }
+    })
+
+    let payload = {
       hostname: getTopWindowLocation().hostname,
       protocol: getTopWindowLocation().protocol.replace(':', ''),
       sw: dim.screenWidth,
       sh: dim.screenHeight,
       ww: dim.innerWidth,
       wh: dim.innerHeight,
-      c: c,
-      id: validBidRequests[0].params.zone,
+      slots: slots,
       sizes: {}
     }
     validBidRequests.forEach(b => {
@@ -73,14 +88,14 @@ export const spec = {
   },
 
   interpretResponse: (serverResponse, bidRequests) => {
-    const body = serverResponse.body
+    const bids = serverResponse.body.bid
     let bidResponses = []
-    bidRequests.bids.forEach(adUnit => {
-      let bid = findBid(adUnit.params, body.bid)
+    bidRequests.bids.forEach(request => {
+      let bid = findBid(request, bids)
       if (bid) {
-        let size = (adUnit.sizes && adUnit.sizes.length && adUnit.sizes[0]) || []
+        let size = request.sizes && request.sizes.length && (request.sizes[0] || [])
         let bidResponse = {
-          requestId: adUnit.bidId,
+          requestId: request.bidId,
           creativeId: bid.id,
           width: size[0] || bid.width,
           height: size[1] || bid.height,
@@ -122,15 +137,22 @@ export const spec = {
 
 }
 
-export let pixel = {
-  fire(url) {
-    let img = document.createElement('img')
-    img.src = url
-    img.id = 'jp-pixel-track'
-    img.style.cssText = 'display:none !important;'
-    document.body.appendChild(img)
+function getCurrentlyDisplayedAd() {
+  let top
+  try {
+    top = window.top
+  } catch (e) {
+    top = window
   }
-};
+
+  let displayed = []
+
+  try {
+    displayed = top.jPAM.getPlugin('bidder').getDisplayedAds()
+  } catch (e) {}
+
+  return displayed
+}
 
 function track (data, payload, type) {
   let pubUrl = ''
@@ -157,114 +179,37 @@ ru=${encodeURIComponent(pubUrl)}&tt=&siw=&sh=${payload.sh}&sw=${payload.sw}&wh=$
 sd=&_c=&et=&aid=&said=&ei=&fc=&sp=&at=bidder&cid=&ist=&mg=&dl=&dlt=&ev=&vt=&zid=${payload.id}&dr=${duration}&di=&pr=&
 cw=&ch=&nt=&st=&jp=${encodeURIComponent(JSON.stringify(jp))}&ty=${type}`
 
-  pixel.fire(pixelUrl);
+  let img = document.createElement('img')
+  img.src = pixelUrl
+  img.id = 'jp-pixel-track'
+  img.style.cssText = 'display:none !important;'
+  document.body.appendChild(img)
 }
 
-function findBid (params, bids) {
-  const tagId = params.zone
-  if (bids[tagId]) {
-    let len = bids[tagId].length
-    while (len--) {
-      if (passCond(params, bids[tagId][len])) {
-        return bids[tagId].splice(len, 1).pop()
-      }
+function findBid(request, bids) {
+  let chooseBid = false
+  bids.forEach(function (bid) {
+    if (request.bidId === bid.id) {
+      chooseBid = bid
+    }
+  });
+  return chooseBid
+}
+
+function preparePubCond(params) {
+  if (params.exclude && !params.allow) {
+    return {
+      exclude: params.exclude
     }
   }
 
-  return false
-}
-
-function passCond (params, bid) {
-  const format = bid.format
-
-  if (params.allow && params.allow.length) {
-    return params.allow.indexOf(format) > -1
-  }
-
-  if (params.exclude && params.exclude.length) {
-    return params.exclude.indexOf(format) < 0
-  }
-
-  return true
-}
-
-function preparePubCond (bids) {
-  const cond = {}
-  const count = {}
-
-  bids.forEach((bid) => {
-    const params = bid.params
-    const zone = params.zone
-
-    if (cond[zone] === 1) {
-      return
-    }
-
-    const allow = params.allow || params.formats || []
-    const exclude = params.exclude || []
-
-    if (allow.length === 0 && exclude.length === 0) {
-      return cond[params.zone] = 1
-    }
-
-    cond[zone] = cond[zone] || [[], {}]
-    cond[zone][0] = arrayUnique(cond[zone][0].concat(allow))
-    exclude.forEach((e) => {
-      if (!cond[zone][1][e]) {
-        cond[zone][1][e] = 1
-      } else {
-        cond[zone][1][e]++
-      }
-    })
-
-    count[zone] = count[zone] || 0
-    if (exclude.length) {
-      count[zone]++
-    }
-  })
-
-  Object.keys(count).forEach((zone) => {
-    if (cond[zone] === 1) return
-
-    const exclude = []
-    Object.keys(cond[zone][1]).forEach((format) => {
-      if (cond[zone][1][format] === count[zone]) {
-        exclude.push(format)
-      }
-    })
-    cond[zone][1] = exclude
-  })
-
-  Object.keys(cond).forEach((zone) => {
-    if (cond[zone] !== 1 && cond[zone][1].length) {
-      cond[zone][0].forEach((r) => {
-        let idx = cond[zone][1].indexOf(r)
-        if (idx > -1) {
-          cond[zone][1].splice(idx, 1)
-        }
-      })
-      cond[zone][0].length = 0
-    }
-
-    if (cond[zone] !== 1 && !cond[zone][0].length && !cond[zone][1].length) {
-      cond[zone] = 1
-    }
-  })
-
-  return cond
-}
-
-function arrayUnique (array) {
-  const a = array.concat()
-  for (let i = 0; i < a.length; ++i) {
-    for (let j = i + 1; j < a.length; ++j) {
-      if (a[i] === a[j]) {
-        a.splice(j--, 1)
-      }
+  if (params.allow) {
+    return {
+      allow: params.allow
     }
   }
 
-  return a
+  return {}
 }
 
 function getWebsiteDim () {

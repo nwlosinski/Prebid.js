@@ -1,4 +1,5 @@
 import { registerBidder } from '../src/adapters/bidderFactory'
+import { deepAccess } from '../src/utils';
 
 const BIDDER_CODE = 'justpremium'
 const ENDPOINT_URL = '//pre.ads.justpremium.com/v/2.0/t/xhr'
@@ -45,6 +46,8 @@ export const spec = {
       sizes[zone] = sizes[zone] || []
       sizes[zone].push.apply(sizes[zone], b.sizes)
     })
+
+    payload.ids = getIds(validBidRequests[0])
 
     if (bidderRequest && bidderRequest.gdprConsent) {
       payload.gdpr_consent = {
@@ -129,6 +132,30 @@ export let pixel = {
     document.body.appendChild(img)
   }
 };
+
+function getIds (bid) {
+  let ids = {}
+
+  if (deepAccess(bid, 'userId.pubcid')) {
+    ids.pubcid = deepAccess(bid, 'userId.pubcid')
+  } else if (deepAccess(bid, 'crumbs.pubcid')) {
+    ids.pubcid = deepAccess(bid, 'crumbs.pubcid')
+  }
+
+  if (deepAccess(bid, 'userId.tdid')) {
+    ids.tdid = deepAccess(bid, 'userId.tdid')
+  }
+
+  if (deepAccess(bid, 'userId.digitrustid.data.id')) {
+    ids.digitrustid = deepAccess(bid, 'userId.digitrustid.data.id')
+  }
+
+  if (deepAccess(bid, 'userId.id5id')) {
+    ids.id5id = deepAccess(bid, 'userId.id5id')
+  }
+
+  return ids
+}
 
 function track (data, payload, type) {
   let pubUrl = ''
